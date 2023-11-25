@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import sheet
 import requests
 import functools
@@ -26,12 +27,14 @@ UPLOAD_CHUNK = "https://nyu.databrary.org/api/upload"
 CREATE_FILE_FROM_FLOW = "https://nyu.databrary.org/api/volume/{volumeid}/asset"
 UPDATE_SLOT = "https://nyu.databrary.org/api/slot/{slotid}"
 QUERY_SLOT = "https://nyu.databrary.org/api/slot/{slotid}/-?records&assets&excerpts&tags&comments"
+DOWNLOAD_ASSET = "https://nyu.databrary.org/slot/{slotid}/asset/{assetid}/download?inline=false"
+DOWNLOAD_SESSION_ZIP = "https://nyu.databrary.org/volume/{volumeid}/slot/{slotid}/zip/{original}"
 
 
-def chunkify(file_size: int, chunk_size: int) -> List[int]:
-    chunk_sizes = [chunk_size] * (file_size // chunk_size)
-    if file_size % chunk_size > 0:
-        chunk_sizes.append(file_size % chunk_size)
+def chunkify(filesize: int, chunk_size: int) -> List[int]:
+    chunk_sizes = [chunk_size] * (filesize // chunk_size)
+    if filesize % chunk_size > 0:
+        chunk_sizes.append(filesize % chunk_size)
     return chunk_sizes
 
 
@@ -133,16 +136,16 @@ class Session:
         upload_name: Optional[str] = None,
     ):
         upload_name = upload_name or os.path.basename(filepath)
-        file_size = os.path.getsize(filepath)
+        filesize = os.path.getsize(filepath)
         upload_flow_id = self._client._create_upload_flow(
-            self.volume.id_, upload_name, file_size
+            self.volume.id_, upload_name, filesize
         )
 
-        chunk_sizes = chunkify(file_size, CHUNK_SIZE)
+        chunk_sizes = chunkify(filesize, CHUNK_SIZE)
 
         f = open(filepath, "rb")
         pbar = tqdm(
-            total=file_size,
+            total=filesize,
             desc="Uploading",
             unit="B",
             unit_scale=True,
@@ -180,7 +183,7 @@ class Session:
                         f"There was an error uploading the file: {filepath}. Upload failed."
                     )
                     return False
-        pbar.update(1)  # deliberately overflow file_size to collapse the pbar
+        pbar.update(1)  # deliberately overflow filesize to collapse the pbar
         pbar.set_description_str("Done")
         pbar.close()
         f.close()
@@ -190,23 +193,52 @@ class Session:
         )
         return True
     
+    def download_file_by_id(self, asset_id: int, filepath: Optional[os.PathLike] = None):
+        asset = filter(lambda x: x["id"] == asset_id, self.metadata["assets"])
+        assert len(asset) > 0, f"Asset {asset_id} not found."
+        assert len(asset) == 1, f"Multiple assets with id {asset_id} found."
+        resp = self._client.s.get(DOWNLOAD_ASSET.format(slotid=self.id_, start=0, end=0, assetid=asset_id))
+        filename = json.loads(resp.headers["content-disposition"].split("=")[1])
+        filesize = int(resp.headers["Content-Length"])
+        filepath = filepath or filename
+        with open(filepath, "wb") as f:
+            pbar = tqdm(
+                total=filesize,
+                desc="Downloading",
+                unit="B",
+                unit_scale=True,
+                unit_divisor=1024,
+            )
+            for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                f.write(chunk)
+                pbar.update(len(chunk))
+            pbar.update(1)  # deliberately overflow filesize to collapse the pbar
+            pbar.set_description_str("Done")
+            pbar.close()
+
+    def download_zip(self, filepath: Optional[os.PathLike] = None, original: bool = False):
+        resp = self._client.s.get(DOWNLOAD_SESSION_ZIP.format(volumeid=self.volume.id_, slotid=self.id_, original=original))
+        filename = json.loads(resp.headers["content-disposition"].split("=")[1])
+        filesize = int(resp.headers["Content-Length"])
+        filepath = filepath or filename
+        with open(filepath, "wb") as f:
+            pbar = tqdm(
+                total=filesize,
+                desc="Downloading",
+                unit="B",
+                unit_scale=True,
+                unit_divisor=1024,
+            )
+            for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                f.write(chunk)
+                pbar.update(len(chunk))
+            pbar.update(1)
+    
     def __str__(self):
         return f"Session {self.id_}: {self.metadata.get('name', '')}"
     
     def __repr__(self):
         return f"Session {self.id_}: {self.metadata.get('name', '')}"
-
-
-class Asset:
-    def __init__(
-        self,
-        client: "Client",
-        volume: "Volume",
-        session: "Session",
-    ):
-        self._client = client
-        self.volume = volume
-        self.session = session
 
 
 class Client:
@@ -221,11 +253,11 @@ class Client:
         return Volume(self, resp.json())
 
     def _create_upload_flow(
-        self, volume_id: int, upload_name: str, file_size: int
+        self, volume_id: int, upload_name: str, filesize: int
     ) -> str:
         resp = self.s.post(
             CREATE_UPLOAD_FLOW.format(volumeid=volume_id),
-            json={"filename": upload_name, "size": file_size},
+            json={"filename": upload_name, "size": filesize},
         )
         return resp.text
 
@@ -293,7 +325,7 @@ class Client:
             },
         )
         return resp.status_code
-    
+
 
 
 if __name__ == "__main__":

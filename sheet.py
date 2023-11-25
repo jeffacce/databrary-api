@@ -77,7 +77,7 @@ METRICS_DOCSTRING = {
     4: "Date of birth (used with session date to calculate age; you can also use the group category to designate age groups)",
     5: '"Male", "Female", or any other relevant gender',
     6: "As classified by NIH, or user-defined classification",
-    7: 'As classified by NIH (Hispanic/Non-Hispanic), or user-defined classification',
+    7: "As classified by NIH (Hispanic/Non-Hispanic), or user-defined classification",
     8: "Pregnancy age in weeks between last menstrual period and birth (or pre-natal observation)",
     9: '"Full term", "Preterm", or other gestational term (assumed "Full term" by default)',
     10: "Weight at birth (in grams, e.g., 3250)",
@@ -135,8 +135,7 @@ def build_records_df(records):
         # there might be multiple contexts; rename them to deduplicate
         if CATEGORIES[record["category"]] == "context":
             new_col_idx = [
-                (f"context{context_counter}", metric)
-                for category, metric in df.columns
+                (f"context{context_counter}", metric) for category, metric in df.columns
             ]
             df.columns = pd.MultiIndex.from_tuples(new_col_idx)
             context_counter += 1
@@ -153,7 +152,15 @@ def build_session_df_row(container, volume_records):
         if "age" in elem:
             rec["age"] = elem["age"]
         container_records.append(rec)
-    folder_df = pd.DataFrame([container.get("name", np.nan), container.get("date", np.nan), len(container["assets"])]).T
-    folder_df.columns = pd.MultiIndex.from_tuples([("folder", "name"), ("folder", "date"), ("folder", "files")])
+    folder_df = pd.DataFrame(
+        [
+            container.get("name", np.nan),
+            container.get("date", np.nan),
+            len(container["assets"]),
+        ]
+    ).T
+    folder_df.columns = pd.MultiIndex.from_tuples(
+        [("folder", "name"), ("folder", "date"), ("folder", "files")]
+    )
     records_df = build_records_df(container_records)
     return pd.concat([folder_df, records_df, pd.DataFrame()], axis=1)

@@ -27,8 +27,12 @@ UPLOAD_CHUNK = "https://nyu.databrary.org/api/upload"
 CREATE_FILE_FROM_FLOW = "https://nyu.databrary.org/api/volume/{volumeid}/asset"
 UPDATE_SLOT = "https://nyu.databrary.org/api/slot/{slotid}"
 QUERY_SLOT = "https://nyu.databrary.org/api/slot/{slotid}/-?records&assets&excerpts&tags&comments"
-DOWNLOAD_ASSET = "https://nyu.databrary.org/slot/{slotid}/asset/{assetid}/download?inline=false"
-DOWNLOAD_SESSION_ZIP = "https://nyu.databrary.org/volume/{volumeid}/slot/{slotid}/zip/{original}"
+DOWNLOAD_ASSET = (
+    "https://nyu.databrary.org/slot/{slotid}/asset/{assetid}/download?inline=false"
+)
+DOWNLOAD_SESSION_ZIP = (
+    "https://nyu.databrary.org/volume/{volumeid}/slot/{slotid}/zip/{original}"
+)
 
 
 def chunkify(filesize: int, chunk_size: int) -> List[int]:
@@ -66,20 +70,35 @@ class Volume:
         if len(ids) > 1:
             raise ValueError(f"Multiple sessions with name {name} found.")
         return self.get_session_by_id(ids[0])
-    
+
     @property
     def _session_ids(self) -> Dict:
-        result = {session["id"]: session.get("name", "") for session in self.metadata["containers"] if session.get("top") is None}
-        result = pd.DataFrame({
-            "id": list(result.keys()),
-            "name": list(result.values()),
-        })
+        result = {
+            session["id"]: session.get("name", "")
+            for session in self.metadata["containers"]
+            if session.get("top") is None
+        }
+        result = pd.DataFrame(
+            {
+                "id": list(result.keys()),
+                "name": list(result.values()),
+            }
+        )
         return result
-    
+
     @property
-    def session_records(self) -> pd.DataFrame:
-        sessions = filter(lambda x: x["id"] in self._session_ids["id"].values, self.metadata["containers"])
-        result = pd.concat([sheet.build_session_df_row(session, self.metadata["records"]) for session in sessions], axis=0)
+    def records(self) -> pd.DataFrame:
+        sessions = filter(
+            lambda x: x["id"] in self._session_ids["id"].values,
+            self.metadata["containers"],
+        )
+        result = pd.concat(
+            [
+                sheet.build_session_df_row(session, self.metadata["records"])
+                for session in sessions
+            ],
+            axis=0,
+        )
         result = result.reset_index(drop=True)
         return result
 
@@ -97,10 +116,10 @@ class Volume:
         volume = self._client.get_volume_by_id(self.id_)
         self.metadata = volume.metadata
         return self
-    
+
     def __str__(self):
         return f"Volume {self.id_}: {self.metadata['name']}"
-    
+
     def __repr__(self):
         return f"Volume {self.id_}: {self.metadata['name']}"
 
@@ -192,12 +211,16 @@ class Session:
             upload_flow_id, self.volume.id_, self.id_, upload_name
         )
         return True
-    
-    def download_file_by_id(self, asset_id: int, filepath: Optional[os.PathLike] = None):
+
+    def download_file_by_id(
+        self, asset_id: int, filepath: Optional[os.PathLike] = None
+    ):
         asset = filter(lambda x: x["id"] == asset_id, self.metadata["assets"])
         assert len(asset) > 0, f"Asset {asset_id} not found."
         assert len(asset) == 1, f"Multiple assets with id {asset_id} found."
-        resp = self._client.s.get(DOWNLOAD_ASSET.format(slotid=self.id_, start=0, end=0, assetid=asset_id))
+        resp = self._client.s.get(
+            DOWNLOAD_ASSET.format(slotid=self.id_, start=0, end=0, assetid=asset_id)
+        )
         filename = json.loads(resp.headers["content-disposition"].split("=")[1])
         filesize = int(resp.headers["Content-Length"])
         filepath = filepath or filename
@@ -216,8 +239,24 @@ class Session:
             pbar.set_description_str("Done")
             pbar.close()
 
-    def download_zip(self, filepath: Optional[os.PathLike] = None, original: bool = False):
-        resp = self._client.s.get(DOWNLOAD_SESSION_ZIP.format(volumeid=self.volume.id_, slotid=self.id_, original=original))
+    def download_file_by_name(
+        self, filename: str, filepath: Optional[os.PathLike] = None
+    ):
+        # find ID of asset
+        asset = filter(lambda x: x["name"] == filename, self.metadata["assets"])
+        assert len(asset) > 0, f"Asset {filename} not found."
+        assert len(asset) == 1, f"Multiple assets with name {filename} found."
+        asset_id = asset[0]["id"]
+        self.download_file_by_id(asset_id, filepath)
+
+    def download_zip(
+        self, filepath: Optional[os.PathLike] = None, original: bool = False
+    ):
+        resp = self._client.s.get(
+            DOWNLOAD_SESSION_ZIP.format(
+                volumeid=self.volume.id_, slotid=self.id_, original=original
+            )
+        )
         filename = json.loads(resp.headers["content-disposition"].split("=")[1])
         filesize = int(resp.headers["Content-Length"])
         filepath = filepath or filename
@@ -233,10 +272,16 @@ class Session:
                 f.write(chunk)
                 pbar.update(len(chunk))
             pbar.update(1)
-    
+
+    @property
+    def records(self) -> pd.DataFrame:
+        return sheet.build_session_df_row(
+            self.metadata, self.volume.metadata["records"]
+        )
+
     def __str__(self):
         return f"Session {self.id_}: {self.metadata.get('name', '')}"
-    
+
     def __repr__(self):
         return f"Session {self.id_}: {self.metadata.get('name', '')}"
 
@@ -327,10 +372,17 @@ class Client:
         return resp.status_code
 
 
-
 if __name__ == "__main__":
     VOLUME_ID = 12345
     client = Client(email="john.doe@nyu.edu", password="foobar")  # log into Databrary
     volume = client.get_volume_by_id(VOLUME_ID)  # get a volume
+    print(volume.records)  # get a dataframe of all session records in the volume
+    session = volume.get_session_by_id(12345)  # get a session
+    session = volume.get_session_by_name("Session 1")  # get a session
+    print(session.records)  # get a dataframe of session records
     session = volume.create_session()  # create a session in the volume
     session.upload_file("/path/to/file.mp4")  # upload a file to the session
+    session.download_file_by_name(
+        "file.mp4", "/path/to/download.mp4"
+    )  # download a file from the session
+    session.download_zip("/path/to/download.zip")  # download a zip of the session

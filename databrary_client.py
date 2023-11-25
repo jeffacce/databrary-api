@@ -1,7 +1,9 @@
 import os
 import time
+import sheet
 import requests
 import functools
+import pandas as pd
 from tqdm import tqdm
 import concurrent.futures
 from typing import Dict, List, IO, Optional, Union
@@ -61,6 +63,22 @@ class Volume:
         if len(ids) > 1:
             raise ValueError(f"Multiple sessions with name {name} found.")
         return self.get_session_by_id(ids[0])
+    
+    @property
+    def _session_ids(self) -> Dict:
+        result = {session["id"]: session.get("name", "") for session in self.metadata["containers"] if session.get("top") is None}
+        result = pd.DataFrame({
+            "id": list(result.keys()),
+            "name": list(result.values()),
+        })
+        return result
+    
+    @property
+    def session_records(self) -> pd.DataFrame:
+        sessions = filter(lambda x: x["id"] in self._session_ids["id"].values, self.metadata["containers"])
+        result = pd.concat([sheet.build_session_df_row(session, self.metadata["records"]) for session in sessions], axis=0)
+        result = result.reset_index(drop=True)
+        return result
 
     def create_session(self) -> "Session":
         # TODO: refactor csrf + requests.session to Context
@@ -76,6 +94,12 @@ class Volume:
         volume = self._client.get_volume_by_id(self.id_)
         self.metadata = volume.metadata
         return self
+    
+    def __str__(self):
+        return f"Volume {self.id_}: {self.metadata['name']}"
+    
+    def __repr__(self):
+        return f"Volume {self.id_}: {self.metadata['name']}"
 
 
 class Session:
@@ -165,6 +189,24 @@ class Session:
             upload_flow_id, self.volume.id_, self.id_, upload_name
         )
         return True
+    
+    def __str__(self):
+        return f"Session {self.id_}: {self.metadata.get('name', '')}"
+    
+    def __repr__(self):
+        return f"Session {self.id_}: {self.metadata.get('name', '')}"
+
+
+class Asset:
+    def __init__(
+        self,
+        client: "Client",
+        volume: "Volume",
+        session: "Session",
+    ):
+        self._client = client
+        self.volume = volume
+        self.session = session
 
 
 class Client:
@@ -251,6 +293,7 @@ class Client:
             },
         )
         return resp.status_code
+    
 
 
 if __name__ == "__main__":

@@ -215,11 +215,11 @@ class Session:
     def download_file_by_id(
         self, asset_id: int, filepath: Optional[os.PathLike] = None
     ):
-        asset = filter(lambda x: x["id"] == asset_id, self.metadata["assets"])
+        asset = list(filter(lambda x: x["id"] == asset_id, self.metadata["assets"]))
         assert len(asset) > 0, f"Asset {asset_id} not found."
-        assert len(asset) == 1, f"Multiple assets with id {asset_id} found."
         resp = self._client.s.get(
-            DOWNLOAD_ASSET.format(slotid=self.id_, start=0, end=0, assetid=asset_id)
+            DOWNLOAD_ASSET.format(slotid=self.id_, start=0, end=0, assetid=asset_id),
+            stream=True,
         )
         filename = json.loads(resp.headers["content-disposition"].split("=")[1])
         filesize = int(resp.headers["Content-Length"])
@@ -243,7 +243,7 @@ class Session:
         self, filename: str, filepath: Optional[os.PathLike] = None
     ):
         # find ID of asset
-        asset = filter(lambda x: x["name"] == filename, self.metadata["assets"])
+        asset = list(filter(lambda x: x["name"] == filename, self.metadata["assets"]))
         assert len(asset) > 0, f"Asset {filename} not found."
         assert len(asset) == 1, f"Multiple assets with name {filename} found."
         asset_id = asset[0]["id"]

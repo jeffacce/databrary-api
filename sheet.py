@@ -1,6 +1,12 @@
 import pandas as pd
 import numpy as np
 
+def slugify(s):
+    if s is None:
+        return None
+    else:
+        return s.lower().replace(" ", "_")
+
 CATEGORIES = {
     1: "participant",
     2: "pilot",
@@ -10,6 +16,7 @@ CATEGORIES = {
     6: "task",
     7: "context",
 }
+CATEGORIES_SLUGIFIED = {k: slugify(v) for k, v in CATEGORIES.items()}
 
 METRICS = {
     1: "ID",
@@ -49,6 +56,7 @@ METRICS = {
     35: "country",
     36: "state",
 }
+METRICS_SLUGIFIED = {k: slugify(v) for k, v in METRICS.items()}
 
 CATEGORIES_TO_METRICS = {
     1: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
@@ -59,6 +67,8 @@ CATEGORIES_TO_METRICS = {
     6: [29, 30, 31],
     7: [32, 33, 34, 35, 36],
 }
+PARTICIPANT_METRICS = {i: METRICS_SLUGIFIED[i] for i in CATEGORIES_TO_METRICS[1]}
+PARTICIPANT_METRICS_STOI = {METRICS_SLUGIFIED[i]: i for i in CATEGORIES_TO_METRICS[1]}
 
 CATEGORIES_DOCSTRING = {
     1: "An individual human subject whose data are used or represented",

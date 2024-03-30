@@ -7,6 +7,7 @@ import functools
 import pandas as pd
 from tqdm import tqdm
 import concurrent.futures
+from difflib import get_close_matches
 from typing import Dict, List, IO, Optional, Union
 
 # https://github.com/databrary/databrary/blob/3d72b67991df39ddb4b0930386ea94e2c5bb5733/web/service/upload.coffee#L14
@@ -33,6 +34,9 @@ DOWNLOAD_ASSET = (
 DOWNLOAD_SESSION_ZIP = (
     "https://nyu.databrary.org/volume/{volumeid}/slot/{slotid}/zip/{original}"
 )
+CREATE_PARTICIPANT = "https://nyu.databrary.org/api/volume/{volumeid}/record"
+GET_PARTICIPANT_BY_ID = "https://nyu.databrary.org/api/record/{recordid}"
+UPDATE_METRIC = "https://nyu.databrary.org/api/record/{recordid}/metric/{metricid}"
 
 
 def chunkify(filesize: int, chunk_size: int) -> List[int]:
@@ -101,6 +105,22 @@ class Volume:
         )
         result = result.reset_index(drop=True)
         return result
+    
+    @property
+    def participants(self) -> pd.DataFrame:
+        participants = filter(
+            lambda x: x["category"] == 1,
+            self.metadata["records"],
+        )
+        result = pd.concat(
+            [
+                sheet.build_record_df(participant)
+                for participant in participants
+            ],
+            axis=0,
+        )
+        result = result.reset_index(drop=True)
+        return result
 
     def create_session(self) -> "Session":
         # TODO: refactor csrf + requests.session to Context
@@ -116,6 +136,38 @@ class Volume:
         volume = self._client.get_volume_by_id(self.id_)
         self.metadata = volume.metadata
         return self
+    
+    def get_participant_by_id(self, participant_id: str) -> "Participant":
+        participant_id = str(participant_id)  # cast to str in case of int ids
+        participant_metadata = filter(
+            lambda x: x["category"] == 1,
+            self.metadata["records"],
+        )
+        matches = list(filter(lambda x: x["measures"]["1"] == participant_id, participant_metadata))
+        if len(matches) == 0:
+            raise ValueError(f"Participant {participant_id} not found.")
+        elif len(matches) > 1:
+            raise ValueError(f"Multiple participants with ID {participant_id} found.")
+        return self._get_participant_by_api_id(matches[0]["id"])
+    
+    def _get_participant_by_api_id(self, participant_id: int) -> "Participant":
+        resp = self._client.s.get(GET_PARTICIPANT_BY_ID.format(recordid=participant_id))
+        return Participant(self._client, self, resp.json())
+    
+    def _create_participant(self) -> "Participant":
+        resp = self._client.s.post(
+            CREATE_PARTICIPANT.format(volumeid=self.metadata["id"]),
+            json={"csverf": self._client.csrf_token, "category": 1},
+        )
+        return self._get_participant_by_api_id(resp.json()["id"])
+    
+    def create_participant_with_id(self, participant_id: str) -> "Participant":
+        participant = self._create_participant()
+        participant.update(ID=participant_id)
+        return participant
+    
+    # TODO: update metric
+    # def update_metric(metric_id, datum):
 
     def __str__(self):
         return f"Volume {self.id_}: {self.metadata['name']}"
@@ -123,6 +175,83 @@ class Volume:
     def __repr__(self):
         return f"Volume {self.id_}: {self.metadata['name']}"
 
+
+class Participant:
+    def __init__(
+        self,
+        client: "Client",
+        volume: "Volume",
+        metadata: Dict,
+    ):
+        self._client = client
+        self.volume = volume
+        self.metadata = metadata
+        self.id_ = metadata["id"]  # this is the internal API id, not the visible participant id
+    
+    def _update_metric(self, metric_id: int, datum):
+        assert metric_id in sheet.PARTICIPANT_METRICS, f"Metric {metric_id} does not exist for Participant. This is likely a bug; please report this issue."
+        resp = self._client.s.post(
+            UPDATE_METRIC.format(recordid=self.id_, metricid=metric_id),
+            json={"csverf": self._client.csrf_token, "datum": datum},
+        )
+        return resp.status_code
+    
+    def refresh(self):
+        participant = self.volume._get_participant_by_api_id(self.id_)
+        self.metadata = participant.metadata
+        return self
+    
+    def update(self, **kwargs):
+        """
+        Updates participant information. The header must be included in the volume spreadsheet, and be one of the following:
+            - `id`
+            - `info`
+            - `description`
+            - `birthdate`
+            - `gender`
+            - `race`
+            - `ethnicity`
+            - `gestational_age`
+            - `pregnancy_term`
+            - `birth_weight`
+            - `disability`
+            - `language`
+            - `country`
+            - `state`
+            - `setting` (deprecated)
+        
+        Example:
+        ```
+        participant.update(id="123", info="some info", description="some description")
+        ```
+
+        Returns:
+            - Participant: the updated participant object
+        """
+        payload = {}
+        for k, v in kwargs.items():
+            k_slug = sheet.slugify(k)
+            if k_slug not in sheet.PARTICIPANT_METRICS_STOI:
+                closest_match = get_close_matches(k_slug, sheet.PARTICIPANT_METRICS_STOI.keys(), n=1)[0]
+                raise ValueError(f"{k} doesn't seem to be a valid participant header. Did you mean {closest_match}?")
+            else:
+                payload[sheet.PARTICIPANT_METRICS_STOI[k_slug]] = v
+        not_in_spreadsheet = [sheet.PARTICIPANT_METRICS[k] for k in payload.keys() if k not in self.volume.metadata["metrics"]]
+        if len(not_in_spreadsheet) > 0:
+            raise ValueError(f"The following headers are not part of the spreadsheet: {not_in_spreadsheet}")
+        for k, v in payload.items():
+            self._update_metric(k, v)
+        return self.refresh()
+    
+    @property
+    def records(self) -> pd.DataFrame:
+        return sheet.build_record_df(self.metadata)
+
+    def __str__(self) -> str:
+        return f"Participant {self.metadata['measures']['1']}"
+    
+    def __repr__(self) -> str:
+        return f"Participant {self.metadata['measures']['1']}"
 
 class Session:
     def __init__(
